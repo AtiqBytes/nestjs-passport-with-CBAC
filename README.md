@@ -1,7 +1,7 @@
 
-# NestJs Authentication & Authorization With passportjs & Role Based Access
+# NestJs Authentication & Authorization With passportjs & Claim-Based Access
 
-Are you tired of worrying about user authentication and authorization in your NestJS applications and want role-based authorization? Look no further! This project provides a comprehensive, battle-tested solution for managing user access and permissions, so you can focus on building amazing apps.
+Are you tired of worrying about user authentication and authorization in your NestJS applications and want claim-based authorization? Look no further! This project provides a comprehensive, battle-tested solution for managing user access and permissions, so you can focus on building amazing apps.
 
 Built for developers, by developers
 
@@ -97,6 +97,26 @@ Whether you're a solo dev or part of a team, this project is designed to help yo
 | :-------- | :------- | :-------------------------------- |
 | `username,password`      | `string` | **Required**. Jwt Bearer Token |
 
+#### View admin only Resource (Based On Claim based Access)
+
+```http
+  GET http://localhost:3000/admin-only
+```
+
+| Parameter | Type     | Description                       |
+| :-------- | :------- | :-------------------------------- |
+| `username,password`      | `string` | **Required**. Jwt Bearer Token |
+
+#### View user only Resource (Based On Claim based Access)
+
+```http
+  GET http://localhost:3000/user-only
+```
+
+| Parameter | Type     | Description                       |
+| :-------- | :------- | :-------------------------------- |
+| `username,password`      | `string` | **Required**. Jwt Bearer Token |
+
 
 
 ## Appendix
@@ -158,90 +178,157 @@ To run this project, you will need to add the following environment variables to
 `DB_DATABASE='passportdb'`
 
 
+# FAQS
 
+#### 1. Why are the permissions missing in my JWT token?
 
+Issue: When you generate a JWT token, the permissions are not included in the token payload after decoding it. You only see username and iat.
 
-
-
-
-#### Q: Why am I getting a "403 Forbidden" error when accessing a protected route?
-
-A: This usually happens when the user does not have the required role to access the route. Ensure that the `@Roles()` decorator is correctly applied to the route, and that the RolesGuard is verifying the roles correctly. Check that the user's role is included in the JWT payload when generating the token in `auth.service.ts`. Log the roles in the RolesGuard to ensure the correct roles are being checked, and verify that the roles are passed as an array in both the JWT payload and the user object.
-
-#### Q: Why is roles.includes or roles.find throwing an error in RolesGuard?
-
-A: This error occurs when roles is not an array, and you're trying to call array methods like includes() or find() on a non-array value. Ensure that the roles passed from the `@Roles()` decorator and in the JWT payload are arrays. In the RolesGuard, add a check to ensure roles is an array using `Array.isArray()`:
-
+Solution: This usually happens because of a typo or case sensitivity issue in your JWT payload creation. Ensure that you are passing the permissions correctly from your user object. In auth.service.ts, use user.permissions (with lowercase "p"), like this:
 
 ```typescript
-if (!roles || !Array.isArray(roles)) {
-  return true;  // No roles required, allow access
+const payload = { username: user.username, sub: user.userId, permissions: user.permissions };
+```
+
+Ensure that user.permissions is properly populated with the relevant permissions before signing the JWT.
+
+#### 2. Why am I getting TypeError: Cannot read properties of undefined (reading 'includes') in PermissionsGuard?
+
+Issue: When trying to access a route that requires permissions, you encounter a TypeScript error:
+TypeError: Cannot read properties of undefined (reading 'includes').
+
+Solution: This error occurs because the permissions field might be missing or undefined in the user object. Make sure the user object has permissions before trying to check them.
+
+Check that user.permissions is being correctly set in the authentication process (e.g., in auth.service.ts).
+
+Modify the guard to ensure that user.permissions exists before checking if it includes the required permission:
+
+```typescript
+const hasPermission = requiredPermissions.every(permission => user.permissions?.includes(permission));
+```
+
+#### 3. How do I fix TypeScript errors related to permissions in auth.service.ts?
+
+Issue: You encounter errors like:
+Property 'permissions' does not exist on type '{ id: number; username: string; email: string; role: string; isActive: boolean; }'.
+
+Solution: This issue occurs because the TypeScript type for your user object does not include the permissions field. Create a DTO (Data Transfer Object) that explicitly includes the permissions field:
+
+```typescript
+export class UserWithPermissions {
+  id: number;
+  username: string;
+  password?: string;
+  email: string;
+  role: string;
+  isActive: boolean;
+  permissions?: string[];  // Optional permissions field
 }
 ```
 
-#### Q: Why is the role not included in the JWT token after login?
-
-A: This happens when the role is not included in the payload when generating the JWT token in AuthService. Ensure that the role is part of the user object when generating the JWT in auth.service.ts:
-
+Then, in your auth.service.ts, assert that the user object matches this type using:
 ```typescript
-const payload = { username: user.username, sub: user.userId, roles: [user.role] };
+const { password, ...result } = user as UserWithPermissions;
 ```
 
-Also, make sure that the roles are properly included when validating the token in jwt.strategy.ts:
+#### 4. Why is the PermissionsGuard not recognizing my user’s permissions?
+
+Issue: The PermissionsGuard is failing to verify the permissions for the user, and you see logs indicating that user.permissions is undefined.
+
+Solution: Ensure that the permissions are included in the JWT token when it’s generated. In your auth.service.ts, verify that the permissions are properly added to the JWT payload:
+
 ```typescript
-return { userId: payload.sub, username: payload.username, roles: payload.roles };
+const payload = { username: user.username, sub: user.userId, permissions: user.permissions };
 ```
 
-#### Q: Why is the admin login not working while user login works?
+Also, double-check that permissions is correctly assigned in the authentication process, based on the user’s role, before the token is generated.
 
-A: This can happen if the authentication logic is only checking the UsersService and not the AdminService when validating the user credentials. Ensure that in auth.service.ts, you're checking both the UsersService for regular users and the AdminService for admins:
+#### 5. How do I assign different permissions to admin and regular users?
+
+Issue: You want to assign specific permissions to users based on their role (admin or user), but the permissions are not being applied correctly.
+
+Solution: In your auth.service.ts, when validating the user, check the role and assign permissions accordingly:
 
 ```typescript
-const user = await this.userService.findOne(username);
-if (!user) {
-  const admin = await this.adminService.findOne(username);
-  // Check admin login
+if (user.role === 'admin') {
+  result.permissions = [
+    Permission.GENERAL_ADMIN_PERMISSION,
+    Permission.GENERAL_USER_PERMISSION,
+    Permission.BLOCK_USER
+  ];
+} else if (user.role === 'user') {
+  result.permissions = [Permission.GENERAL_USER_PERMISSION];
 }
 ```
 
-#### Q: Why is the RolesGuard always receiving ['admin'] in the roles variable, even for users?
+Ensure you also return the user object with the permissions field in the correct format.
 
-A: This happens if the @Roles() decorator is hardcoded or incorrectly set, causing the guard to always receive the same role. Ensure that the @Roles() decorator is correctly applied on routes and dynamically sets roles based on the expected access level:
-```typescript
-@Roles('admin')  // For admin routes
-@Roles('user')   // For user routes
-```
+#### 6. Why are routes not protected correctly by the PermissionsGuard?
 
-#### Q: Why is the user.roles field undefined in the RolesGuard?
+Issue: Even after applying the PermissionsGuard, users without the required permissions can still access protected routes.
 
-A: This occurs if the roles are not being properly set or returned in the validate method of jwt.strategy.ts. Ensure that the validate function in jwt.strategy.ts returns the roles array from the JWT payload:
+Solution: Make sure you’ve applied both the JwtAuthGuard and PermissionsGuard to the route. For example:
 
 ```typescript
-async validate(payload: any) {
-  return { userId: payload.sub, username: payload.username, roles: payload.roles };
+@UseGuards(JwtAuthGuard, PermissionsGuard)
+@Permissions(Permission.GENERAL_USER_PERMISSION)
+@Get('user-only')
+userOnly() {
+  return 'This is a user-only route';
 }
 ```
 
-#### Q: Why am I getting Unauthorized during login even though the credentials are correct?
+Also, ensure that the PermissionsGuard is correctly implemented, checking both required permissions and user permissions.
 
-A: This might happen if the validateUser method in AuthService is not correctly validating credentials or if the password comparison using bcrypt fails. Verify that the user exists in the database by checking the UsersService and AdminService in validateUser, and ensure that bcrypt.compare() is properly comparing the plain-text password with the hashed password stored in the database.
+#### 7. Why are some routes requiring authentication even though they shouldn’t?
 
-#### Q: Why is the JWT token expiring too quickly (after 60 seconds)?
+Issue: You’ve applied a global JwtAuthGuard, but some routes like signup or login should be publicly accessible without authentication.
 
-A: The expiration time of the JWT token is controlled by the expiresIn option in AuthService. If set too low, the token will expire quickly. Adjust the expiresIn value in the generateAccessToken method to a higher value if needed:
-
-```typescript
-return this.jwtService.sign(payload, { expiresIn: '3600s' });  // 1 hour
-```
-
-#### Q: Why is the refresh token not working properly or not returning a new access token?
-
-A: This could happen if the refresh token is not validated correctly or if the validateRefreshToken method in AuthService is not correctly implemented. Ensure that the refresh token is properly validated in validateRefreshToken:
+Solution: To allow specific routes to be accessed without authentication, use a decorator that bypasses the global guard, like @Public():
 
 ```typescript
-const payload = this.jwtService.verify(token);
+@Public()
+@Post('signup')
+async signup(@Body() createUserDto: CreateUserDto) {
+  return this.authService.signup(createUserDto);
+}
 ```
-Check that the refresh token has a longer expiresIn value than the access token, and ensure the correct user data is returned from the refresh token validation.
+
+This ensures that routes like signup and login are accessible without a token while keeping other routes protected by the JwtAuthGuard.
+
+#### 8. How do I troubleshoot permission issues in the PermissionsGuard?
+
+Issue: You are unsure whether the correct permissions are being checked or why the user’s permissions are not being matched.
+
+Solution: Add logging to the PermissionsGuard to help debug issues by printing both the required permissions and the user’s permissions:
+
+```typescript
+console.log('Required permissions:', requiredPermissions);
+console.log('User permissions:', user.permissions);
+```
+
+This will allow you to see what permissions are being required for the route and what permissions are present in the user’s JWT.
+
+#### 9. Why is bcrypt not validating passwords correctly?
+
+Issue: Password validation fails even though the correct password is provided, leading to failed login attempts.
+
+Solution: Ensure that you are using bcrypt.compare properly, and double-check the password hash stored in the database. The comparison should look like this:
+
+```typescript
+if (user && await bcrypt.compare(password, user.password)) {
+  // Password matches
+}
+```
+
+If validation still fails, verify that the password hashing and storage process (e.g., bcrypt.hash) is correctly implemented during user registration or password updates.
+
+
+
+
+
+
+
 
 
 ## Features
@@ -300,86 +387,78 @@ Install my-project with npm
   
 ```
     
-## Lessons Learned
 
-## Authorization with Enum Files:
+## Lessons Learned:
 
-Files Involved: role.enum.ts
-- I learned that defining roles in an enum file like roles.enum.ts allows for effective role management.
--  By using enums, I can define roles such as admin and user and integrate these roles into the system consistently.
--   This ensures that roles are standardized across the application, especially when used in role-based access control.
+## Claim-Based Authorization with Permissions:
 
-## Role Management in User and Admin Entities:
+Files Involved: permissions.decorator.ts, permissions.guard.ts, auth.service.ts
 
-Files Involved: user.entity.ts, admin.entity.ts
+- I learned how to implement claim-based authorization by creating a Permission enum in permissions.decorator.ts, which holds the different permission levels, such as GENERAL_ADMIN_PERMISSION, GENERAL_USER_PERMISSION, and BLOCK_USER.
+- By utilizing the Permissions decorator, I could attach required permissions to routes, enforcing authorization checks before granting access.
+- The PermissionsGuard was created to intercept requests and check if the user had the necessary permissions to access specific routes.
+- This involved extracting permissions from the user's JWT and matching them against the required permissions.
+  
+## Issues with Missing Permissions in JWT Payload:
 
-- I added a role column to both the User and Admin entities.
-- This column helps assign a specific role to each user or admin in the system.
--  When retrieving users from the database, this role is included in the JWT token to handle role-based authorization.
+Files Involved: auth.service.ts
 
-## Defining Roles in DTOs:
+- Initially, when I generated the JWT token in the auth.service.ts, I encountered an issue where the permissions were missing from the token payload after decoding it.
+-  Instead, the payload only contained the username and iat claims.
+-  The issue was due to using user.Permissions with an uppercase "P" instead of user.permissions (lowercase), which led to the permissions not being included in the JWT token.
+-  To fix this, I updated the generateAccessToken and generateRefreshToken functions to use user.permissions and ensured the permissions were properly added to the JWT payload.
+  
+## PermissionsGuard Not Recognizing User Permissions:
 
-Files Involved: create-user.dto.ts, create-admin.dto.ts
+Files Involved: permissions.guard.ts
 
-- I ensured that when creating users or admins, the role attribute is included in the DTOs (Data Transfer Objects).
--  This guarantees that the role is part of the request structure when creating new users or admins, making the role available for authorization checks.
+- While testing the authorization with Postman, I encountered an error when trying to access routes with user tokens. The error message was:
+  
+```typescript
+TypeError: Cannot read properties of undefined (reading 'include')
+```
 
-##  Role Decorator and Guard:
+- The problem arose because the PermissionsGuard was trying to access user.Permissions with an uppercase "P", but the user object had the permissions field in lowercase (user.permissions).
 
-Files Involved: roles.decorator.ts, roles.guard.ts
-- I created a Roles decorator (roles.decorator.ts) to specify which roles are allowed to access specific routes. 
-- The decorator allows me to define which roles (e.g., admin or user) are required to access a route.
-- The RolesGuard (roles.guard.ts) then enforces these role requirements.
--  Initially, I faced issues when the guard failed due to roles.includes not being a function, but I fixed this by ensuring roles was always an array.
--  
-## Handling Admin and User Login with JWT:
+- I also realized that user.permissions could be undefined in some cases, so I added a check to ensure that the permissions array exists before using .includes().
+- After handling this, the guard correctly verified if the user had the required permissions.
 
-Files Involved: auth.service.ts, jwt.strategy.ts, local.strategy.ts
+## TypeScript Type Errors with Permissions in Auth Service:
 
-- I implemented a system where both admins and users can log in using the same authentication service.
--  Initially, I faced an issue where only user logins were working because I was only checking UsersService for validation.
--   I solved this by adding a check for AdminService in AuthService, ensuring that both admins and users can log in and receive their respective JWT tokens.
+Files Involved: auth.service.ts, userWithPermission.dto.ts
 
-## Issues Faced:
+- When defining the validateUser function, I used Promise<UserWithPermissions | null>, which specifies that the function can return a user object with permissions or null.
+- Initially, I encountered a TypeScript error when trying to assign permissions to the result.permissions field:
 
-## Fixing JWT Payload and Role Encoding:
+```typescript
+Property 'permissions' does not exist on type '{ id: number; username: string; email: string; role: string; isActive: boolean; }'.ts(2339)
+```
 
-Files Involved: auth.service.ts, jwt.strategy.ts
+- To resolve this, I created a new DTO (userWithPermission.dto.ts) called UserWithPermissions, which extended the user entity to include the permissions field.
+- By asserting the type of user as UserWithPermissions, I ensured that TypeScript recognized the permissions field, fixing the error.
 
-- I encountered an issue where the role was not included in the JWT payload, which caused the role guard to fail.
--  To resolve this, I updated the generateAccessToken and generateRefreshToken methods in auth.service.ts to include the user's role in the JWT payload.
--   Additionally, I fixed the JwtStrategy to ensure the roles were extracted correctly from the token payload.
+## Token Payload and Permissions Encoding:
 
-## Role-Based Route Protection and 403 Forbidden Issue:
+Files Involved: auth.service.ts
 
-Files Involved: app.controller.ts, roles.guard.ts
+- Another issue I faced was that after logging in, the JWT token generated didn’t include the user’s permissions. This caused protected routes to fail when trying to check for permissions-based access.
+- I resolved this by ensuring the correct permissions were included in the JWT payload by using user.permissions in both the access and refresh token generation functions.
+  
+## PermissionsGuard Logging and Debugging:
 
-- When trying to access the /profile route, I encountered a 403 Forbidden error even though the correct roles were assigned.
--  This was due to the roles not being properly included in the JWT or not being correctly handled in the JwtStrategy.
--   Once I ensured that the roles were properly extracted and passed through the RolesGuard, the issue was resolved, and admins were able to access admin-only routes.
+Files Involved: permissions.guard.ts
 
-##  Improper Roles Handling in Roles Guard:
+- To troubleshoot the permission issues, I added logging in permissions.guard.ts to print both the required permissions and the user’s permissions from the request.
+-  This helped me identify that user.permissions was undefined in some cases.
+- After fixing the case sensitivity and ensuring permissions were included in the JWT, I saw that the permissions were properly logged and validated against the required permissions for the route.
+  
+## Role and Permissions for Admin Users:
 
-Files Involved: roles.guard.ts
+Files Involved: auth.service.ts
 
-- The RolesGuard initially threw errors like roles.includes is not a function.
--  This happened because roles was not always an array.
--  After adding checks to ensure roles was an array, I was able to resolve the issue and properly enforce role-based access control. I also learned to log the roles and user.roles to debug these types of issues effectively.
-
-## JWT Role Handling and Forbidden Resource:
-
-Files Involved: roles.guard.ts, jwt.strategy.ts
-
-- Another issue arose when I consistently received a Forbidden resource error after login.
-- The problem was that the roles in the JWT payload were not correctly handled in the RolesGuard or JwtStrategy.
--  I learned to ensure that the roles are properly encoded in the JWT and extracted correctly during validation to allow access to routes based on roles.
-
-## Testing Role Guards and Fixing Access Issues:
-
-Files Involved: app.controller.ts, roles.guard.ts
-
-- After resolving the role-based access issues, I tested the functionality by creating separate routes for users and admins, applying the @Roles() decorator to protect the routes.
--  By using Postman to test login and accessing the protected routes, I confirmed that only admins could access admin-only routes and users could not.
+- While validating users in the auth.service.ts, I needed to assign different permissions based on the user’s role (admin or regular user). Initially, the permissions for admins were not correctly applied.
+- I used the UserWithPermissions DTO to define a structure for users and added a condition that if a user had the role of "admin," they would receive GENERAL_ADMIN_PERMISSION, GENERAL_USER_PERMISSION, and BLOCK_USER permissions.
+- This approach ensured that both regular users and admins were assigned the correct set of permissions when their credentials were validated.
 
   
   
